@@ -3,7 +3,22 @@ import sys
 from pathlib import Path
 import os
 import json
+import lzss
+from timeit import default_timer as timer
+def extractAVLZ(data):
+    data = data[12:]
+    return lzss.decompress(data)
+def createAVLZ(data):
+    decompressedSize = len(data)
+    writer = BinaryReader()
+    data = lzss.compress(data)
+    AVLZSize = len(data)+12
+    writer.write_str("AVLZ")
+    writer.write_uint32(decompressedSize)
+    writer.write_uint32(AVLZSize)
+    writer.write_bytes(data)
 
+    return writer.buffer()
 if len(sys.argv) == 1:
     input("Usage: Drag and drop DAT files onto the script.\nPress ENTER to continue.")
     quit()
@@ -45,6 +60,7 @@ for dat_file in files:
             p = 0
             if count != 0:
                 for j in range(count):
+                    isCompressed = False
                     pointer2 = reader.read_uint32()
                     size2 = reader.read_uint32()
                     filenameOffset = reader.read_uint32()
@@ -59,6 +75,9 @@ for dat_file in files:
                     reader.seek(offset)
                     if (size2 != 0):
                         fileData = reader.read_bytes(size2)
+                        if fileData[:4].decode('ASCII') == "AVLZ":
+                            fileData = extractAVLZ(fileData)
+                            isCompressed = True
                         readertemp = BinaryReader(fileData)
                         # stolen from retraso
                         try:
@@ -91,7 +110,8 @@ for dat_file in files:
                     reader.read_uint32(1)
                     file = {
                         "Has file name?": hash,
-                        "Path": filename,
+                        "Compressed?": isCompressed,
+                        "Path": filename
                     }
                     section.update({p: file})
                     p += 1
@@ -106,6 +126,7 @@ for dat_file in files:
         with open(output_file, "w") as filejson:
             filejson.write(json.dumps(header, ensure_ascii=False, indent=2))
     elif (Mypath.is_dir()):
+        start = timer()
         size4 = 0
         w = BinaryReader()
         size2 = 0
@@ -129,18 +150,28 @@ for dat_file in files:
             listOfFilesInFolder = list()
             currentfolder = Mypath / folderlist[i]
             hashes = list()
+            compressed = list()
             for j in range(len(p[f"Section {i}"])-1):
                 listOfFilesInFolder.append(
                     dat_file + "\\" + p[f"Section {i}"][str(j)]["Path"])
                 hashes.append(p[f"Section {i}"][str(j)]["Has file name?"])
+                compressed.append(p[f"Section {i}"][str(j)]["Compressed?"])
             identifier = folderlist[i]
             size = 0
+            j = 0
             for elem in listOfFilesInFolder:
                 if (elem != (dat_file + "\\" + "BLANK")):
-                    size += os.path.getsize(elem)
-                    test = 16 - (size % 16)
-                    if (test != 16):
-                        size += test
+                    if compressed[j]:
+                        file = open(elem,"rb")
+                        avlz = createAVLZ(file.read())
+                        file.close()
+                        size += len(avlz)
+                    else:
+                        size += os.path.getsize(elem)
+                test = 16 - (size % 16)
+                if (test != 16):
+                    size += test
+                j+=1
             for h in range(len(hashes)):
                 if hashes[h]:
                     name = listOfFilesInFolder[h].replace(dat_file + "\\","")
@@ -171,18 +202,32 @@ for dat_file in files:
             w.write_uint32(0)
             size3 = 0
             k = 0
+            j = 0
             for elem in listOfFilesInFolder:
                 test3 = (16*len(listOfFilesInFolder)+16+size3) % 16
                 w.write_uint32(16*len(listOfFilesInFolder)+16+size3)
                 hash = elem.split("~")
                 if (elem != (dat_file + "\\" + "BLANK")):
-                    w.write_uint32(os.path.getsize(elem))
+                    if compressed[k]:
+                        file = open(elem,"rb")
+                        avlz = createAVLZ(file.read())
+                        file.close()
+                        w.write_uint32(len(avlz))
+                    else:
+                        w.write_uint32(os.path.getsize(elem))
                 else:
                     w.write_uint32(0)
                 w.write_uint32(0)
                 w.write_uint32(0)
                 if (elem != (dat_file + "\\" + "BLANK")):
-                    size3 += os.path.getsize(elem)
+                    if compressed[k]:
+                        file = open(elem,"rb")
+                        avlz = createAVLZ(file.read())
+                        file.close()
+                        size3+= len(avlz)
+                        j+=1
+                    else:
+                        size3 += os.path.getsize(elem)
                 if (hashes[k]):
                     name = listOfFilesInFolder[k].replace(dat_file + "\\","")
                     test = 16 - (len(name) % 16)
@@ -191,10 +236,15 @@ for dat_file in files:
                     size3 += (16 - (size3 % 16))
                 k += 1
             j = 0
+            k = 0
             for elem in listOfFilesInFolder:
                 if (elem != (dat_file + "\\" + "BLANK")):
                     with open(elem, "rb") as file:
-                        w.write_bytes(file.read())
+                        if compressed[j]:
+                            avlz = createAVLZ(file.read())
+                            w.write_bytes(bytes(avlz))
+                        else:
+                            w.write_bytes(file.read())
                 stringPointer=0
                 if hashes[j]:
                     name = listOfFilesInFolder[j].replace(dat_file + "\\","")
@@ -215,3 +265,4 @@ for dat_file in files:
             listOfFilesInFolder.clear()
         with open(newarchivename, "wb") as newarchive:
             newarchive.write(w.buffer())
+        end = timer()

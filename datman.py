@@ -75,9 +75,12 @@ for dat_file in files:
                     reader.seek(offset)
                     if (size2 != 0):
                         fileData = reader.read_bytes(size2)
-                        if fileData[:4].decode('ASCII') == "AVLZ":
-                            fileData = extractAVLZ(fileData)
-                            isCompressed = True
+                        try:
+                            if fileData[:4].decode('ASCII') == "AVLZ":
+                                fileData = extractAVLZ(fileData)
+                                isCompressed = True
+                        except:
+                            pass
                         readertemp = BinaryReader(fileData)
                         # stolen from retraso
                         try:
